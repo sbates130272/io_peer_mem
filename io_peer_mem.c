@@ -80,18 +80,11 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 		debug_msg("vma: %lx %lx %lx\n", addr, vma->vm_end - vma->vm_start,
 			  vma->vm_flags);
 
-		if (vma->vm_flags & VM_MIXEDMAP) {
+		if (vma->vm_flags & VM_MIXEDMAP)
 			handle_mm_fault(current->mm, vma, addr, FAULT_FLAG_WRITE);
-			//follow_pfn doesn't currently support MIXEDMAP even though
-			// it should so we set it here and clear it below.
-			vma->vm_flags |= VM_PFNMAP;
-		}
 
 		if (follow_pfn(vma, addr, &pfn))
 			goto err;
-
-		if (vma->vm_flags & VM_MIXEDMAP)
-			vma->vm_flags &= ~VM_PFNMAP;
 
 		debug_msg("pfn: %lx\n", pfn << PAGE_SHIFT);
 		size -= min_t(unsigned long, size, vma->vm_end - addr);
@@ -153,16 +146,8 @@ static int dma_map(struct sg_table *sg_head, void *context,
 		if (!vma)
 			return -EINVAL;
 
-		//follow_pfn doesn't currently support MIXEDMAP even though
-		// it should so we set it here and clear it below.
-		if (vma->vm_flags & VM_MIXEDMAP)
-			vma->vm_flags |= VM_PFNMAP;
-
 		if (follow_pfn(vma, addr, &pfn))
 			return -EINVAL;
-
-		if (vma->vm_flags & VM_MIXEDMAP)
-			vma->vm_flags &= ~VM_PFNMAP;
 
 		sg_set_page(sg, NULL, PAGE_SIZE, 0);
 		sg->dma_address = pfn << PAGE_SHIFT;
