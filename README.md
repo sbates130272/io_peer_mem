@@ -12,10 +12,10 @@ the IB perftest toolset [4].
 
 Some examples include:
 
-donard_rdma_server -m /mnt/dax_fs/test.dat
-ib_read_bw -n 20 -R -a --mmap=/mnt/dax_fs/test.dat
-ib_read_bw -n 20 -R -a --mmap=/dev/pfn_mmapable_char_dev
-ib_read_bw -n 20 -R -a --mmap=/sys/bus/pci/devices/0000\:03\:00.0/resource4_wc
+* donard_rdma_server -m /mnt/dax_fs/test.dat
+* ib_read_bw -n 20 -R -a --mmap=/mnt/dax_fs/test.dat
+* ib_read_bw -n 20 -R -a --mmap=/dev/pfn_mmapable_char_dev
+* ib_read_bw -n 20 -R -a --mmap=/sys/bus/pci/devices/0000\:03\:00.0/resource4_wc
 
 
 
