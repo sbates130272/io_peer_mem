@@ -80,6 +80,9 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 		debug_msg("vma: %lx %lx %lx\n", addr, vma->vm_end - vma->vm_start,
 			  vma->vm_flags);
 
+		if (!(vma->vm_flags & VM_WRITE))
+			goto err;
+
 		if (vma->vm_flags & VM_MIXEDMAP)
 			handle_mm_fault(current->mm, vma, addr, FAULT_FLAG_WRITE);
 
