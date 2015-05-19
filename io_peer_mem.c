@@ -54,7 +54,6 @@ MODULE_VERSION(VERSION);
 struct context {
 	unsigned long addr;
 	size_t size;
-	unsigned long npages;
 };
 
 static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
@@ -62,39 +61,34 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 {
 	struct vm_area_struct *vma = NULL;
 	struct context *ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
-	unsigned long pfn;
+	unsigned long pfn, end;
 
 	if (!ctx)
 		return 0;
 
 	ctx->addr = addr;
 	ctx->size = size;
-	ctx->npages = 0;
+
+	end = addr + size;
 
 	vma = find_vma(current->mm, addr);
 
-	do {
-		if (!vma)
-			goto err;
+	if (!vma || vma->vm_end < end)
+		goto err;
 
-		debug_msg("vma: %lx %lx %lx\n", addr, vma->vm_end - vma->vm_start,
-			  vma->vm_flags);
+	debug_msg("vma: %lx %lx %lx\n", addr, vma->vm_end - vma->vm_start,
+		  vma->vm_flags);
 
-		if (!(vma->vm_flags & VM_WRITE))
-			goto err;
+	if (!(vma->vm_flags & VM_WRITE))
+		goto err;
 
-		if (vma->vm_flags & VM_MIXEDMAP)
-			handle_mm_fault(current->mm, vma, addr, FAULT_FLAG_WRITE);
+	if (vma->vm_flags & VM_MIXEDMAP)
+		handle_mm_fault(current->mm, vma, addr, FAULT_FLAG_WRITE);
 
-		if (follow_pfn(vma, addr, &pfn))
-			goto err;
+	if (follow_pfn(vma, addr, &pfn))
+		goto err;
 
-		debug_msg("pfn: %lx\n", pfn << PAGE_SHIFT);
-		size -= min_t(unsigned long, size, vma->vm_end - addr);
-		ctx->npages++;
-		vma = vma->vm_next;
-	} while(size);
-
+	debug_msg("pfn: %lx\n", pfn << PAGE_SHIFT);
 	debug_msg("acquire %p\n", ctx);
 
 	*context = ctx;
@@ -118,8 +112,7 @@ static int get_pages(unsigned long addr, size_t size, int write, int force,
 		     struct sg_table *sg_head, void *context,
 		     u64 core_context)
 {
-	struct context *ctx = (struct context *) context;
-	int ret = sg_alloc_table(sg_head, ctx->npages, GFP_KERNEL);
+	int ret = sg_alloc_table(sg_head, 1, GFP_KERNEL);
 	if (ret)
 		return ret;
 
@@ -145,7 +138,7 @@ static int dma_map(struct sg_table *sg_head, void *context,
 
 	vma = find_vma(current->mm, addr);
 
-	for_each_sg(sg_head->sgl, sg, ctx->npages, i) {
+	for_each_sg(sg_head->sgl, sg, 1, i) {
 		if (!vma)
 			return -EINVAL;
 
@@ -160,16 +153,9 @@ static int dma_map(struct sg_table *sg_head, void *context,
 		debug_msg("sg[%d] %lx %x\n", i,
 			  (unsigned long) sg->dma_address,
 			  sg->dma_length);
-
-		size -= sg->dma_length;
-		vma = vma->vm_next;
-
-		if (!size)
-			break;
-
 	}
 
-	*nmap = i+1;
+	*nmap = 1;
 
 	return 0;
 }
