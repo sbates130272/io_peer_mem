@@ -35,6 +35,8 @@
 
 #include <linux/mm.h>
 #include <linux/sched.h>
+#include <linux/fs.h>
+#include <linux/file.h>
 
 #define NAME    "io_peer_mem"
 #define VERSION "0.1"
@@ -50,10 +52,55 @@ MODULE_VERSION(VERSION);
 #define debug_msg(FMT, ARGS...)
 #endif
 
+/**
+ * This is copied from drivers/media/v4l2-core/videobuf2-memops.c:
+ *
+ * This function attempts to acquire an area mapped in the userspace for
+ * the duration of a hardware mapping. The area is "locked" by performing
+ * the same set of operation that are done when process calls fork() and
+ * memory areas are duplicated.
+ */
+static struct vm_area_struct *get_vma(struct vm_area_struct *vma)
+{
+	struct vm_area_struct *vma_copy;
+
+	vma_copy = kmalloc(sizeof(*vma_copy), GFP_KERNEL);
+	if (vma_copy == NULL)
+		return NULL;
+
+	if (vma->vm_ops && vma->vm_ops->open)
+		vma->vm_ops->open(vma);
+
+	if (vma->vm_file)
+		get_file(vma->vm_file);
+
+	memcpy(vma_copy, vma, sizeof(*vma));
+
+	vma_copy->vm_mm = NULL;
+	vma_copy->vm_next = NULL;
+	vma_copy->vm_prev = NULL;
+
+	return vma_copy;
+}
+
+static void put_vma(struct vm_area_struct *vma)
+{
+	if (!vma)
+		return;
+
+	if (vma->vm_ops && vma->vm_ops->close)
+		vma->vm_ops->close(vma);
+
+	if (vma->vm_file)
+		fput(vma->vm_file);
+
+	kfree(vma);
+}
 
 struct context {
-	unsigned long addr;
+	unsigned long dma_address;
 	size_t size;
+	struct vm_area_struct *vma;
 };
 
 static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
@@ -66,7 +113,6 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (!ctx)
 		return 0;
 
-	ctx->addr = addr;
 	ctx->size = size;
 
 	end = addr + size;
@@ -88,8 +134,17 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (follow_pfn(vma, addr, &pfn))
 		goto err;
 
-	debug_msg("pfn: %lx\n", pfn << PAGE_SHIFT);
+	ctx->dma_address = (pfn << PAGE_SHIFT) + (addr & ~PAGE_MASK);
+	debug_msg("dma_address: %lx\n", ctx->dma_address);
 	debug_msg("acquire %p\n", ctx);
+
+	ctx->vma = get_vma(vma);
+
+	if (ctx->vma == NULL) {
+		printk(NAME ": could not allocate VMA!\n");
+		goto err;
+	}
+
 
 	*context = ctx;
 	__module_get(THIS_MODULE);
@@ -102,10 +157,14 @@ err:
 
 static void release(void *context)
 {
+	struct context *ctx = (struct context *) context;
+
 	debug_msg("release %p\n", context);
+
+	put_vma(ctx->vma);
+
 	kfree(context);
 	module_put(THIS_MODULE);
-	return;
 }
 
 static int get_pages(unsigned long addr, size_t size, int write, int force,
@@ -130,24 +189,12 @@ static int dma_map(struct sg_table *sg_head, void *context,
 {
 	struct scatterlist *sg;
 	struct context *ctx = (struct context *) context;
-	struct vm_area_struct *vma = NULL;
-	unsigned long addr = ctx->addr;
-	unsigned long size = ctx->size;
-	unsigned long pfn;
 	int i;
 
-	vma = find_vma(current->mm, addr);
-
 	for_each_sg(sg_head->sgl, sg, 1, i) {
-		if (!vma)
-			return -EINVAL;
-
-		if (follow_pfn(vma, addr, &pfn))
-			return -EINVAL;
-
 		sg_set_page(sg, NULL, PAGE_SIZE, 0);
-		sg->dma_address = pfn << PAGE_SHIFT;
-		sg->dma_length = min_t(unsigned long, size, vma->vm_end - addr);
+		sg->dma_address = ctx->dma_address;
+		sg->dma_length = ctx->size;
 		sg->offset = 0;
 
 		debug_msg("sg[%d] %lx %x\n", i,
