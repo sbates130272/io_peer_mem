@@ -39,7 +39,7 @@
 #include <linux/file.h>
 
 #define NAME    "io_peer_mem"
-#define VERSION "0.1"
+#define VERSION "0.2"
 
 MODULE_AUTHOR("Logan Gunthorpe");
 MODULE_DESCRIPTION("MMAP'd IO memory plug-in");
