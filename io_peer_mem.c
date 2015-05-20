@@ -76,7 +76,6 @@ static struct vm_area_struct *get_vma(struct vm_area_struct *vma)
 
 	memcpy(vma_copy, vma, sizeof(*vma));
 
-	vma_copy->vm_mm = NULL;
 	vma_copy->vm_next = NULL;
 	vma_copy->vm_prev = NULL;
 
@@ -98,7 +97,7 @@ static void put_vma(struct vm_area_struct *vma)
 }
 
 struct context {
-	unsigned long dma_address;
+	unsigned long addr;
 	size_t size;
 	struct vm_area_struct *vma;
 };
@@ -113,6 +112,7 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (!ctx)
 		return 0;
 
+	ctx->addr = addr;
 	ctx->size = size;
 
 	end = addr + size;
@@ -128,14 +128,17 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (!(vma->vm_flags & VM_WRITE))
 		goto err;
 
-	if (vma->vm_flags & VM_MIXEDMAP)
-		handle_mm_fault(current->mm, vma, addr, FAULT_FLAG_WRITE);
+	if (vma->vm_flags & VM_MIXEDMAP) {
+		unsigned long start = addr & PAGE_MASK;
+
+		for (; start < end; start += PAGE_SIZE)
+			handle_mm_fault(current->mm, vma, start, FAULT_FLAG_WRITE);
+	}
 
 	if (follow_pfn(vma, addr, &pfn))
 		goto err;
 
-	ctx->dma_address = (pfn << PAGE_SHIFT) + (addr & ~PAGE_MASK);
-	debug_msg("dma_address: %lx\n", ctx->dma_address);
+	debug_msg("pfn: %lx\n", pfn << PAGE_SHIFT);
 	debug_msg("acquire %p\n", ctx);
 
 	ctx->vma = get_vma(vma);
@@ -171,7 +174,10 @@ static int get_pages(unsigned long addr, size_t size, int write, int force,
 		     struct sg_table *sg_head, void *context,
 		     u64 core_context)
 {
-	int ret = sg_alloc_table(sg_head, 1, GFP_KERNEL);
+	struct context *ctx = (struct context *) context;
+
+	int ret = sg_alloc_table(sg_head, (ctx->size + PAGE_SIZE-1) / PAGE_SIZE,
+				 GFP_KERNEL);
 	if (ret)
 		return ret;
 
@@ -189,20 +195,35 @@ static int dma_map(struct sg_table *sg_head, void *context,
 {
 	struct scatterlist *sg;
 	struct context *ctx = (struct context *) context;
-	int i;
+	unsigned long pfn;
+	unsigned long addr = ctx->addr;
+	unsigned long size = ctx->size;
+	int i, ret;
 
-	for_each_sg(sg_head->sgl, sg, 1, i) {
+	*nmap = ctx->size / PAGE_SIZE;
+
+	for_each_sg(sg_head->sgl, sg,  (ctx->size + PAGE_SIZE-1) / PAGE_SIZE, i) {
 		sg_set_page(sg, NULL, PAGE_SIZE, 0);
-		sg->dma_address = ctx->dma_address;
-		sg->dma_length = ctx->size;
-		sg->offset = 0;
 
-		debug_msg("sg[%d] %lx %x\n", i,
+		if ((ret = follow_pfn(ctx->vma, addr, &pfn)))
+			return ret;
+
+		sg->dma_address = (pfn << PAGE_SHIFT);;
+		sg->dma_length = PAGE_SIZE;
+		sg->offset = addr & ~PAGE_MASK;
+
+		debug_msg("sg[%d] %lx %x %d\n", i,
 			  (unsigned long) sg->dma_address,
-			  sg->dma_length);
-	}
+			  sg->dma_length, sg->offset);
 
-	*nmap = 1;
+		addr += sg->dma_length - sg->offset;
+		size -= sg->dma_length - sg->offset;
+
+		if (!size) {
+			*nmap = i;
+			break;
+		}
+	}
 
 	return 0;
 }
