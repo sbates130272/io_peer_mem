@@ -122,7 +122,7 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (!vma || vma->vm_end < end)
 		goto err;
 
-	debug_msg("vma: %lx %lx %lx %x\n", addr, vma->vm_end - vma->vm_start,
+	debug_msg("vma: %lx %lx %lx %zx\n", addr, vma->vm_end - vma->vm_start,
 		  vma->vm_flags, size);
 
 	if (!(vma->vm_flags & VM_WRITE))
