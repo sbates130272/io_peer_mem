@@ -102,6 +102,22 @@ struct context {
 	struct vm_area_struct *vma;
 };
 
+static void fault_missing_pages(struct vm_area_struct *vma, unsigned long start,
+				unsigned long end)
+{
+	unsigned long pfn;
+
+	if (!(vma->vm_flags & VM_MIXEDMAP))
+		return;
+
+	for (; start < end; start += PAGE_SIZE) {
+		if (!follow_pfn(vma, start, &pfn))
+			continue;
+
+		handle_mm_fault(current->mm, vma, start, FAULT_FLAG_WRITE);
+	}
+}
+
 static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 		   char *peer_mem_name, void **context)
 {
@@ -128,12 +144,7 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (!(vma->vm_flags & VM_WRITE))
 		goto err;
 
-	if (vma->vm_flags & VM_MIXEDMAP) {
-		unsigned long start = addr & PAGE_MASK;
-
-		for (; start < end; start += PAGE_SIZE)
-			handle_mm_fault(current->mm, vma, start, FAULT_FLAG_WRITE);
-	}
+	fault_missing_pages(vma, addr & PAGE_MASK, end);
 
 	if (follow_pfn(vma, addr, &pfn))
 		goto err;
