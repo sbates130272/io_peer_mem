@@ -37,6 +37,7 @@
 #include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/file.h>
+#include <linux/cdev.h>
 
 #define NAME    "io_peer_mem"
 #define VERSION "0.2"
@@ -118,6 +119,37 @@ static void fault_missing_pages(struct vm_area_struct *vma, unsigned long start,
 	}
 }
 
+static int is_uverbs_file(struct vm_area_struct *vma)
+{
+	/* There is an ugly corner case leak possible:
+	 *   If a malicous userspace process grabs the uverbs file descriptor
+	 *   (for /dev/infinband/uverbs*), mmaps it, and tries to register
+	 *   that memory via io_peer_mem then this module will successfully
+	 *   register the memory, and take a reference to that file.
+	 *
+	 *   Seeing the uverbs code only cleans up memory regions only after
+	 *   that file is closed, and io_peer_mem will only release that file
+	 *   when the cleanup occurs, a deadlock will occur and the registration
+	 *   will be permanently leaked.
+	 *
+	 * This code handles this situation in a bit of an hackish way:
+	 *   we check if the backing file's i_cdev's kobjs's name starts with
+	 *   "uverbs" and refuses to map it if it does.
+	 */
+	struct inode *i;
+
+	if (!vma->vm_file || !vma->vm_file->f_inode)
+		return 0;
+
+	i = vma->vm_file->f_inode;
+
+	if (!S_ISCHR(i->i_mode) || i->i_cdev == NULL)
+		return 0;
+
+	return strncmp(i->i_cdev->kobj.name, "uverbs", strlen("uverbs")) == 0;
+}
+
+
 static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 		   char *peer_mem_name, void **context)
 {
@@ -140,6 +172,11 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 
 	debug_msg("vma: %lx %lx %lx %zx\n", addr, vma->vm_end - vma->vm_start,
 		  vma->vm_flags, size);
+
+	if (is_uverbs_file(vma)) {
+		pr_err(NAME ": can't register a uverbs device!\n");
+		goto err;
+	}
 
 	if (!(vma->vm_flags & VM_WRITE))
 		goto err;
