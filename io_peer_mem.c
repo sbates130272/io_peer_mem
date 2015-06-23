@@ -218,6 +218,7 @@ static void deferred_cleanup(struct work_struct *work)
 
 	mmu_notifier_unregister(&ctx->mn, ctx->owning_mm);
 	kfree(ctx);
+	mmput(ctx->owning_mm);
 	module_put(THIS_MODULE);
 }
 
@@ -226,6 +227,8 @@ static void release(void *context)
 	struct context *ctx = (struct context *) context;
 
 	pr_debug("release %p\n", context);
+
+	atomic_inc(&ctx->owning_mm->mm_users);
 
 	INIT_WORK(&ctx->cleanup_work, deferred_cleanup);
 	schedule_work(&ctx->cleanup_work);
