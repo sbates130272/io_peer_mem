@@ -49,6 +49,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <rdma/peer_mem.h>
 
 #include <linux/mm.h>
@@ -59,19 +61,12 @@
 #include <linux/workqueue.h>
 #include <linux/mutex.h>
 
-#define NAME    "io_peer_mem"
 #define VERSION "0.3"
 
 MODULE_AUTHOR("Logan Gunthorpe");
 MODULE_DESCRIPTION("MMAP'd IO memory plug-in");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION(VERSION);
-
-#ifdef DEBUG
-#define debug_msg(FMT, ARGS...) printk(NAME ": " FMT, ## ARGS)
-#else
-#define debug_msg(FMT, ARGS...)
-#endif
 
 static void *reg_handle;
 static invalidate_peer_memory mem_invalidate_callback;
@@ -95,7 +90,7 @@ static void do_invalidate(struct context *ctx)
 		goto unlock_and_return;
 
 	ctx->active = 0;
-	debug_msg("invalidated\n");
+	pr_debug("invalidated\n");
 	mem_invalidate_callback(reg_handle, ctx->core_context);
 
 unlock_and_return:
@@ -106,7 +101,7 @@ static void mmu_release(struct mmu_notifier *mn,
 			struct mm_struct *mm)
 {
 	struct context *ctx = container_of(mn, struct context, mn);
-	debug_msg("mmu_release\n");
+	pr_debug("mmu_release\n");
 	do_invalidate(ctx);
 }
 
@@ -119,7 +114,7 @@ static void mmu_invalidate_range(struct mmu_notifier *mn,
 	if (start >= (ctx->addr + ctx->size) || ctx->addr >= end)
 		return;
 
-	debug_msg("mmu_invalidate_range %lx-%lx\n", start, end);
+	pr_debug("mmu_invalidate_range %lx-%lx\n", start, end);
 	do_invalidate(ctx);
 }
 
@@ -132,7 +127,7 @@ static void mmu_invalidate_page(struct mmu_notifier *mn,
 	if (address < ctx->addr || address < (ctx->addr + ctx->size))
 		return;
 
-	debug_msg("mmu_invalidate_page %lx\n", address);
+	pr_debug("mmu_invalidate_page %lx\n", address);
 	do_invalidate(ctx);
 }
 
@@ -183,7 +178,7 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (!vma || vma->vm_end < end)
 		goto err;
 
-	debug_msg("vma: %lx %lx %lx %zx\n", addr, vma->vm_end - vma->vm_start,
+	pr_debug("vma: %lx %lx %lx %zx\n", addr, vma->vm_end - vma->vm_start,
 		  vma->vm_flags, size);
 
 	if (!(vma->vm_flags & VM_WRITE))
@@ -194,18 +189,18 @@ static int acquire(unsigned long addr, size_t size, void *peer_mem_private_data,
 	if (follow_pfn(vma, addr, &pfn))
 		goto err;
 
-	debug_msg("pfn: %lx\n", pfn << PAGE_SHIFT);
+	pr_debug("pfn: %lx\n", pfn << PAGE_SHIFT);
 
 	mutex_init(&ctx->mmu_mutex);
 
 	ctx->mn.ops = &mmu_notifier_ops;
 
 	if (mmu_notifier_register(&ctx->mn, ctx->owning_mm)) {
-		pr_err(NAME ": Failed to register mmu_notifier\n");
+		pr_err("Failed to register mmu_notifier\n");
 		return 0;
 	}
 
-	debug_msg("acquire %p\n", ctx);
+	pr_debug("acquire %p\n", ctx);
 	*context = ctx;
 	__module_get(THIS_MODULE);
 	return 1;
@@ -219,7 +214,7 @@ static void deferred_cleanup(struct work_struct *work)
 {
 	struct context *ctx = container_of(work, struct context, cleanup_work);
 
-	debug_msg("cleanup %p\n", ctx);
+	pr_debug("cleanup %p\n", ctx);
 
 	mmu_notifier_unregister(&ctx->mn, ctx->owning_mm);
 	kfree(ctx);
@@ -230,7 +225,7 @@ static void release(void *context)
 {
 	struct context *ctx = (struct context *) context;
 
-	debug_msg("release %p\n", context);
+	pr_debug("release %p\n", context);
 
 	INIT_WORK(&ctx->cleanup_work, deferred_cleanup);
 	schedule_work(&ctx->cleanup_work);
@@ -291,7 +286,7 @@ static int dma_map(struct sg_table *sg_head, void *context,
 		sg->dma_length = PAGE_SIZE;
 		sg->offset = addr & ~PAGE_MASK;
 
-		debug_msg("sg[%d] %lx %x %d\n", i,
+		pr_debug("sg[%d] %lx %x %d\n", i,
 			  (unsigned long) sg->dma_address,
 			  sg->dma_length, sg->offset);
 
@@ -319,7 +314,7 @@ static unsigned long get_page_size(void *context)
 }
 
 static struct peer_memory_client io_mem_client = {
-	.name           = NAME,
+	.name           = KBUILD_MODNAME,
 	.version        = VERSION,
 	.acquire	= acquire,
 	.get_pages	= get_pages,
@@ -338,14 +333,14 @@ static int __init io_mem_init(void)
 	if (!reg_handle)
 		return -EINVAL;
 
-	printk(NAME ": module loaded\n");
+	pr_info("module loaded\n");
 
 	return 0;
 }
 
 static void __exit io_mem_cleanup(void)
 {
-	printk(NAME ": module unloaded\n");
+	pr_info("module unloaded\n");
 	ib_unregister_peer_memory_client(reg_handle);
 }
 
